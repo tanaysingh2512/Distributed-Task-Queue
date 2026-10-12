@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package taskqueue.v1;
+
+option go_package = "github.com/tanaydeps/distributed-task-queue/api/proto/taskqueue/v1;taskqueuev1";
+
+import "google/protobuf/timestamp.proto";
+
+// TaskQueue is the coordination surface between the server and workers.
+// Workers lease tasks, heartbeat to keep the lease alive, and ack/nack on
+// completion. See internal/lease for the server-side implementation of
+// the heartbeat/lease protocol described here.
+service TaskQueue {
+  // Lease requests the next available task for a given queue, blocking
+  // (via Redis pub/sub wakeup, see internal/storage/redis.go) until one is
+  // available or the context deadline is reached.
+  rpc Lease(LeaseRequest) returns (LeaseResponse);
+
+  // Heartbeat renews an active lease. Workers call this on an interval
+  // shorter than lease.ttl (internal/lease.DefaultTTL) to signal liveness.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Ack reports successful completion of a leased task.
+  rpc Ack(AckRequest) returns (AckResponse);
+
+  // Nack reports failed execution. The server applies the retry policy
+  // (internal/retry) to compute the next AvailableAt, or routes to the
+  // dead-letter queue (internal/dlq) if attempts are exhausted.
+  rpc Nack(NackRequest) returns (NackResponse);
+
+  // Enqueue submits a new task. Exposed to workers as well as external
+  // producers so the system can be used for worker-chained task graphs.
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+}
+
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_CRITICAL = 1;
+  PRIORITY_HIGH = 2;
+  PRIORITY_DEFAULT = 3;
+  PRIORITY_LOW = 4;
+}
+
+message Task {
+  string id = 1;
+  string queue = 2;
+  bytes payload = 3;
+  Priority priority = 4;
+  int32 attempts = 5;
+  int32 max_attempts = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message LeaseRequest {
+  string queue = 1;
+  string worker_id = 2;
+  // How long to block waiting for a task before returning empty.
+  int32 wait_timeout_seconds = 3;
+}
+
+message LeaseResponse {
+  Task task = 1;
+  google.protobuf.Timestamp lease_expiry = 2;
+  bool available = 3;
+}
+
+message HeartbeatRequest {
+  string task_id = 1;
+  string worker_id = 2;
+}
+
+message HeartbeatResponse {
+  google.protobuf.Timestamp new_lease_expiry = 1;
+}
+
+message AckRequest {
+  string task_id = 1;
+  string worker_id = 2;
+}
+
+message AckResponse {
+  bool ok = 1;
+}
+
+message NackRequest {
+  string task_id = 1;
+  string worker_id = 2;
+  string error = 3;
+  // If true, the server will not apply backoff and will route directly
+  // to the dead-letter queue regardless of remaining attempts. Intended
+  // for non-retriable application errors (e.g. payload validation).
+  bool permanent_failure = 4;
+}
+
+message NackResponse {
+  bool requeued = 1;
+  bool dead_lettered = 2;
+}
+
+message EnqueueRequest {
+  string queue = 1;
+  bytes payload = 2;
+  Priority priority = 3;
+  int32 max_attempts = 4;
+  string idempotency_key = 5;
+}
+
+message EnqueueResponse {
+  string task_id = 1;
+}

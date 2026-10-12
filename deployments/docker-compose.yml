@@ -1,0 +1,85 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: taskqueue
+      POSTGRES_PASSWORD: taskqueue
+      POSTGRES_DB: taskqueue
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskqueue"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile.server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TASKQUEUE_POSTGRES_DSN: "postgres://taskqueue:taskqueue@postgres:5432/taskqueue?sslmode=disable"
+      TASKQUEUE_REDIS_ADDR: "redis:6379"
+    ports:
+      - "50051:50051"
+      - "9090:9090"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile.worker
+    depends_on:
+      - server
+    environment:
+      TASKQUEUE_POSTGRES_DSN: "postgres://taskqueue:taskqueue@postgres:5432/taskqueue?sslmode=disable"
+      TASKQUEUE_REDIS_ADDR: "redis:6379"
+    deploy:
+      replicas: 3
+    ports:
+      - "9091-9093:9091"
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9099:9090"
+    depends_on:
+      - server
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:

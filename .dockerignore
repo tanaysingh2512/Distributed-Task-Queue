@@ -1,0 +1,7 @@
+.git
+bin/
+*.md
+deployments/grafana
+deployments/prometheus
+docs/
+.github/

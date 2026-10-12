@@ -1,0 +1,22 @@
+server:
+  grpc_addr: ":50051"
+
+postgres:
+  dsn: "postgres://taskqueue:taskqueue@postgres:5432/taskqueue?sslmode=disable"
+  max_open_conns: 20
+
+redis:
+  addr: "redis:6379"
+  db: 0
+
+lease:
+  ttl: 30s
+
+retry:
+  base_delay: 500ms
+  max_delay: 2m
+  max_attempts: 8
+
+metrics:
+  addr: ":9090"
+  path: "/metrics"
