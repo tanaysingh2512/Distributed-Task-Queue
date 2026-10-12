@@ -28,6 +28,33 @@ Grafana, containerized with Docker Compose.
 - **Docker Compose** stack: server, worker (scaled), Postgres, Redis,
   Prometheus, Grafana — one command to bring the whole system up.
 
+<img width="1376" height="768" alt="TaskQueue" src="https://github.com/user-attachments/assets/bc76808c-765d-49ee-ba1b-65c129c7977b" />
+
+
+## Project layout
+
+```
+.
+├── api/proto/taskqueue/v1/   # gRPC service + message definitions
+├── cmd/
+│   ├── server/                # coordinator: scheduling, leasing, reaping
+│   └── worker/                # leases tasks, executes, acks/nacks
+├── internal/
+│   ├── model/                  # Task domain type
+│   ├── queue/                  # priority-heap scheduler
+│   ├── retry/                  # exponential backoff with full jitter
+│   ├── lease/                  # heartbeat/lease manager
+│   ├── dlq/                    # dead-letter routing
+│   ├── storage/                # Postgres (durable) + Redis (notify) stores
+│   ├── metrics/                # Prometheus collectors
+│   └── config/                 # YAML + env config loading
+├── migrations/                 # Postgres schema
+├── configs/                    # server.yaml / worker.yaml
+├── deployments/                # Dockerfiles, docker-compose, Prometheus, Grafana
+├── docs/                       # architecture notes
+└── .github/workflows/          # CI: vet, fmt check, test, docker build
+```
+
 ## Architecture
 
 ```mermaid
@@ -76,64 +103,10 @@ flowchart LR
     Workers -->|/metrics| PM
     PM --> GF
 ```
-
-### Lease lifecycle and crash recovery
-
-```mermaid
-sequenceDiagram
-    participant W as Worker
-    participant S as Server
-    participant DB as Postgres
-
-    W->>S: Lease(queue, worker_id)
-    S->>DB: UPDATE ... WHERE lease_owner IS NULL OR lease_expiry < now()
-    DB-->>S: row claimed
-    S-->>W: Task + lease_expiry (now + 30s)
-
-    loop every ~10s while processing
-        W->>S: Heartbeat(task_id, worker_id)
-        S->>DB: extend lease_expiry
-    end
-
-    alt worker completes successfully
-        W->>S: Ack(task_id)
-        S->>DB: state = SUCCEEDED
-    else worker crashes mid-task
-        Note over W: process dies, heartbeats stop
-        Note over S: reaper sweep (every TTL/2)
-        S->>DB: ListExpiredLeases()
-        DB-->>S: task_id (lease_expiry < now)
-        S->>S: push task back onto priority queue
-    end
-```
-
 See [`docs/architecture.md`](docs/architecture.md) for the full design
 rationale, including why Postgres is the system of record while Redis is
 only a wake-up fast path, and the retry/backoff and dead-letter design.
 
-## Project layout
-
-```
-.
-├── api/proto/taskqueue/v1/   # gRPC service + message definitions
-├── cmd/
-│   ├── server/                # coordinator: scheduling, leasing, reaping
-│   └── worker/                # leases tasks, executes, acks/nacks
-├── internal/
-│   ├── model/                  # Task domain type
-│   ├── queue/                  # priority-heap scheduler
-│   ├── retry/                  # exponential backoff with full jitter
-│   ├── lease/                  # heartbeat/lease manager
-│   ├── dlq/                    # dead-letter routing
-│   ├── storage/                # Postgres (durable) + Redis (notify) stores
-│   ├── metrics/                # Prometheus collectors
-│   └── config/                 # YAML + env config loading
-├── migrations/                 # Postgres schema
-├── configs/                    # server.yaml / worker.yaml
-├── deployments/                # Dockerfiles, docker-compose, Prometheus, Grafana
-├── docs/                       # architecture notes
-└── .github/workflows/          # CI: vet, fmt check, test, docker build
-```
 
 ## Running locally
 
@@ -170,9 +143,9 @@ matters most for the delivery guarantees above.
 
 ## Implementation status
 
-The core logic — priority scheduling, retry/backoff, lease coordination
+The core logic of priority scheduling, retry/backoff, lease coordination
 and crash recovery, dead-letter routing, and the Postgres/Redis storage
-layer — is fully implemented and unit-tested.
+layer is fully implemented and unit-tested.
 
 The gRPC transport wiring (`cmd/server`, `cmd/worker`) is structured
 against the service defined in
